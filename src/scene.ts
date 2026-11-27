@@ -2,7 +2,8 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { Design, Hole, Link, PITCH as P, PartInstance, Side, toHole } from './model';
+import { Design, Hole, Link, PITCH as P, PartInstance, Side, holeKey, toHole } from './model';
+import { isSocketStrip, pinHoles } from './parts';
 import { BOARD_T, M, buildPart, disposeGroup, ghostify } from './meshes';
 
 export type Picked = { kind: 'part' | 'link'; id: string };
@@ -131,9 +132,24 @@ export class View {
     mk(new THREE.CircleGeometry(0.5, 12), holeMat, -BOARD_T - 0.012, true);
   }
 
-  private placePart(obj: THREE.Object3D, inst: { pos: { x: number; y: number }; rot: number }) {
-    obj.position.set(inst.pos.x, 0, inst.pos.y);
-    obj.rotation.y = (-inst.rot * Math.PI) / 2;
+  /** Holes ("side:c,r") that hold a female socket strip, so parts plugged into them sit raised. */
+  private stripHoles = new Set<string>();
+
+  /** Build a part's mesh and put it on the board, flipped over when it is on the underside. */
+  private mount(inst: PartInstance): THREE.Group {
+    const side = inst.side ?? 'top';
+    const onStrip = pinHoles(inst).some((h) => this.stripHoles.has(`${side}:${holeKey(h)}`));
+    const body = buildPart(inst, onStrip);
+    const g = new THREE.Group();
+    g.add(body);
+    if (side === 'bottom') {
+      // Half-turn about the board's row axis: mirrors the footprint and hangs the part below.
+      body.rotation.z = Math.PI;
+      body.position.y = -BOARD_T;
+    }
+    g.position.set(inst.pos.x, 0, inst.pos.y);
+    g.rotation.y = (-inst.rot * Math.PI) / 2;
+    return g;
   }
 
   private buildLink(l: Link, selected: boolean): THREE.Mesh {
@@ -169,10 +185,12 @@ export class View {
     if (d.board.cols !== this.board.cols || d.board.rows !== this.board.rows) this.buildBoard(d.board.cols, d.board.rows);
     this.clear(this.partsGroup);
     this.clear(this.linksGroup);
+    this.stripHoles.clear();
+    for (const part of d.parts)
+      if (isSocketStrip(part.type)) for (const h of pinHoles(part)) this.stripHoles.add(`${part.side ?? 'top'}:${holeKey(h)}`);
     for (const part of d.parts) {
-      const g = buildPart(part);
+      const g = this.mount(part);
       g.userData.partId = part.id;
-      this.placePart(g, part);
       this.partsGroup.add(g);
       if (selection?.kind === 'part' && selection.id === part.id) {
         g.updateMatrixWorld(true);
@@ -192,9 +210,8 @@ export class View {
       this.ghost = null;
     }
     if (inst) {
-      const g = buildPart(inst);
+      const g = this.mount(inst);
       ghostify(g, ok);
-      this.placePart(g, inst);
       this.ghost = g;
       this.overlay.add(g);
     }

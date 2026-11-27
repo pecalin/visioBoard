@@ -20,6 +20,8 @@ export interface Resolved {
   body: { x0: number; y0: number; x1: number; y1: number };
   /** Groups of pin indices that are joined inside the part (e.g. several GND pins). */
   internal: number[][];
+  /** Decorations that depend on the instance's props; replaces the definition's list. */
+  decor?: Decor[];
 }
 
 export interface Decor {
@@ -58,6 +60,8 @@ export type Shape =
   | 'to220'
   | 'terminal'
   | 'header'
+  | 'socket'
+  | 'ring'
   | 'trimmer';
 
 export interface PartDef {
@@ -260,12 +264,13 @@ const SILVER = 0xc4c9d0;
 const CHIP = 0x18181b;
 const range = (n: number, f: (i: number) => string): string[] => Array.from({ length: n }, (_, i) => f(i));
 
-const header: PartDef = {
-  id: 'header',
-  name: 'Pin header (1×N)',
+/** Single-row strip of N positions: male pin header or female socket. */
+const strip = (id: string, name: string, shape: Shape): PartDef => ({
+  id,
+  name,
   category: 'Connectors',
   prefix: 'J',
-  shape: 'header',
+  shape,
   color: 0x1a1a1c,
   decor: [],
   props: [{ key: 'count', label: 'Pins', type: 'int', min: 1, max: 40, def: 4 }],
@@ -277,7 +282,79 @@ const header: PartDef = {
       internal: [],
     };
   },
+});
+
+// ── WS2812 addressable LEDs ─────────────────────────────────────────────
+const LED_CATEGORY = 'WS2812 LEDs';
+const pixel = (u: number, v: number): Decor => ({ shape: 'box', u, v, w: 4.4, d: 4.4, h: 1.6, color: 0xf4f4f0 });
+const row = (names: string[], y: number, ly: number): Pin[] => names.map((name, i) => ({ name, x: i, y, lx: 0, ly }));
+
+/** Strip soldered flat on the board: input pads at one end, output pads at the other, 3 holes per LED. */
+const ws2812Strip: PartDef = {
+  id: 'ws2812-strip',
+  name: 'WS2812 LED strip',
+  category: LED_CATEGORY,
+  prefix: 'LED',
+  shape: 'module',
+  color: 0x16171b,
+  decor: [],
+  props: [{ key: 'count', label: 'LEDs', type: 'int', min: 1, max: 30, def: 8 }],
+  resolve(props) {
+    const n = num(props, 'count', 8);
+    const far = n * 3 + 2;
+    const pins = [...row(['5V', 'DIN', 'GND'], 0, 1), ...row(['5V', 'DOUT', 'GND'], far, -1)];
+    const body = { x0: P - 5, y0: -1.6, x1: P + 5, y1: far * P + 1.6 };
+    const depth = body.y1 - body.y0;
+    return {
+      pins,
+      body,
+      internal: autoInternal(pins),
+      decor: Array.from({ length: n }, (_, i) => pixel(0.5, (1.6 + (i * 3 + 2.5) * P) / depth)),
+    };
+  },
 };
+
+/** 8×8 panel, 65 mm square, with input pads on one edge and output pads on the opposite edge. */
+const ws2812Matrix: PartDef = {
+  id: 'ws2812-matrix-8x8',
+  name: 'WS2812 matrix 8×8',
+  category: LED_CATEGORY,
+  prefix: 'LED',
+  shape: 'module',
+  color: 0x16171b,
+  decor: Array.from({ length: 64 }, (_, i) => pixel((6.95 + (i % 8) * 7.3) / 65, (6.95 + Math.floor(i / 8) * 7.3) / 65)),
+  props: [],
+  resolve() {
+    const far = 24;
+    const pins = [...row(['DIN', '5V', 'GND'], 0, 1), ...row(['DOUT', '5V', 'GND'], far, -1)];
+    const edge = (65 - far * P) / 2;
+    return { pins, body: { x0: P - 32.5, y0: -edge, x1: P + 32.5, y1: far * P + edge }, internal: autoInternal(pins) };
+  },
+};
+
+/** Ring of LEDs. Diameter follows the LED count (12 → 37 mm, 16 → 46 mm, 24 → 66 mm). */
+const ws2812Ring: PartDef = {
+  id: 'ws2812-ring',
+  name: 'WS2812 LED ring',
+  category: LED_CATEGORY,
+  prefix: 'LED',
+  shape: 'ring',
+  color: 0x16171b,
+  decor: [],
+  props: [{ key: 'count', label: 'LEDs', type: 'int', min: 8, max: 60, def: 12 }],
+  resolve(props) {
+    const od = num(props, 'count', 12) * 2.4 + 8;
+    const cx = 1.5 * P;
+    return {
+      pins: row(['DIN', '5V', 'GND', 'DOUT'], 0, 1),
+      body: { x0: cx - od / 2, y0: -3.5, x1: cx + od / 2, y1: od - 3.5 },
+      internal: [],
+    };
+  },
+};
+
+const I2C_MUX_LEFT = ['VIN', 'GND', 'SDA', 'SCL', 'RST', 'A0', 'A1', 'A2', 'SD0', 'SC0', 'SD1', 'SC1'];
+const I2C_MUX_RIGHT = ['SC7', 'SD7', 'SC6', 'SD6', 'SC5', 'SD5', 'SC4', 'SD4', 'SC3', 'SD3', 'SC2', 'SD2'];
 
 export const PARTS: PartDef[] = [
   // ── Microcontroller boards ────────────────────────────────────────────
@@ -395,8 +472,8 @@ export const PARTS: PartDef[] = [
     id: 'tca9548a',
     name: 'TCA9548A I²C multiplexer',
     category: 'Breakout boards',
-    left: ['VIN', 'GND', 'SDA', 'SCL', 'RST', 'A0', 'A1', 'A2', 'SD0', 'SC0', 'SD1', 'SC1'],
-    right: ['SC7', 'SD7', 'SC6', 'SD6', 'SC5', 'SD5', 'SC4', 'SD4', 'SC3', 'SD3', 'SC2', 'SD2'],
+    left: I2C_MUX_LEFT,
+    right: I2C_MUX_RIGHT,
     rowSpan: 7,
     color: 0x5a2a82,
     side: 1.8,
@@ -406,6 +483,39 @@ export const PARTS: PartDef[] = [
       { shape: 'box', u: 0.5, v: 0.5, w: 4.4, d: 7.8, h: 1, color: CHIP },
       { shape: 'cyl', u: 0.5, v: 0.14, w: 3, d: 3, h: 0.06, color: 0x0d0d0f },
       { shape: 'cyl', u: 0.5, v: 0.86, w: 3, d: 3, h: 0.06, color: 0x0d0d0f },
+    ],
+  }),
+  dual({
+    id: 'pca9548a',
+    name: 'PCA9548A I²C multiplexer',
+    category: 'Breakout boards',
+    left: I2C_MUX_LEFT,
+    right: I2C_MUX_RIGHT,
+    rowSpan: 7,
+    color: 0x0d5c8c,
+    side: 1.8,
+    top: 1.8,
+    bottom: 1.8,
+    decor: [
+      { shape: 'box', u: 0.5, v: 0.5, w: 4.4, d: 7.8, h: 1, color: CHIP },
+      { shape: 'cyl', u: 0.5, v: 0.14, w: 3, d: 3, h: 0.06, color: 0x0d0d0f },
+      { shape: 'cyl', u: 0.5, v: 0.86, w: 3, d: 3, h: 0.06, color: 0x0d0d0f },
+    ],
+  }),
+  dual({
+    id: 'max3485-module',
+    name: 'MAX3485 RS-485 module',
+    category: 'Breakout boards',
+    left: ['RO', 'RE', 'DE', 'DI'],
+    right: ['VCC', 'B', 'A', 'GND'],
+    rowSpan: 15,
+    color: 0xb3261e,
+    side: 2.9,
+    top: 3.2,
+    bottom: 3.2,
+    decor: [
+      { shape: 'box', u: 0.4, v: 0.5, w: 4, d: 5, h: 1.5, color: CHIP },
+      { shape: 'box', u: 0.72, v: 0.5, w: 8, d: 10.2, h: 8, color: 0x2a6fd6 },
     ],
   }),
   dual({
@@ -444,6 +554,19 @@ export const PARTS: PartDef[] = [
   }),
 
   // ── Sensors & displays ────────────────────────────────────────────────
+  dual({
+    id: 'mpr121',
+    name: 'MPR121 capacitive touch (12-ch)',
+    category: 'Sensors & displays',
+    left: ['3V3', 'IRQ', 'SCL', 'SDA', 'ADD', 'GND'],
+    right: range(12, (i) => `E${i}`),
+    rowSpan: 7,
+    color: 0xb3261e,
+    side: 1.5,
+    top: 1.6,
+    bottom: 1.6,
+    decor: [{ shape: 'box', u: 0.5, v: 0.5, w: 3, d: 3, h: 0.9, color: CHIP }],
+  }),
   single({
     id: 'bme280',
     name: 'BME280 temp / humidity / pressure',
@@ -510,6 +633,11 @@ export const PARTS: PartDef[] = [
     ['VDD', 2, 0],
   ]),
 
+  // ── WS2812 LEDs ───────────────────────────────────────────────────────
+  ws2812Strip,
+  ws2812Ring,
+  ws2812Matrix,
+
   // ── Logic ICs ─────────────────────────────────────────────────────────
   dip('74hc595', '74HC595 shift register', ['QB', 'QC', 'QD', 'QE', 'QF', 'QG', 'QH', 'GND', "QH'", 'SRCLR', 'SRCLK', 'RCLK', 'OE', 'SER', 'QA', 'VCC']),
   dip('74hc165', '74HC165 input shift register', ['SH/LD', 'CLK', 'E', 'F', 'G', 'H', 'QH̅', 'GND', 'QH', 'SER', 'A', 'B', 'C', 'D', 'CLKINH', 'VCC']),
@@ -518,6 +646,7 @@ export const PARTS: PartDef[] = [
     'A0', 'A1', 'A2', 'RESET', 'INTB', 'INTA', ...range(8, (i) => `GPA${i}`),
   ]),
   dip('cd4051', 'CD4051 analog mux (8-ch)', ['Y4', 'Y6', 'Z', 'Y7', 'Y5', 'E', 'VEE', 'GND', 'S2', 'S1', 'S0', 'Y3', 'Y0', 'Y1', 'Y2', 'VCC']),
+  dip('max3485-dip', 'MAX3485 RS-485 transceiver (DIP-8)', ['RO', 'RE', 'DE', 'DI', 'GND', 'A', 'B', 'VCC']),
   dip('dip8', 'Generic DIP-8', range(8, (i) => String(i + 1))),
   dip('dip14', 'Generic DIP-14', range(14, (i) => String(i + 1))),
 
@@ -549,7 +678,8 @@ export const PARTS: PartDef[] = [
   ]),
 
   // ── Connectors & switches ─────────────────────────────────────────────
-  header,
+  strip('header', 'Pin header (1×N)', 'header'),
+  strip('socket', 'Female header socket (1×N)', 'socket'),
   fixed('screw-terminal-2', 'Screw terminal (2-pin)', 'Connectors', 'J', 'terminal', 0x2a6fd6, [
     ['1', 0, 0],
     ['2', 2, 0],
@@ -575,6 +705,10 @@ export const PARTS: PartDef[] = [
 ];
 
 const byId = new Map(PARTS.map((p) => [p.id, p]));
+/** Parts that can sit on their own female header socket. */
+export const canSocket = (def: PartDef): boolean => def.shape === 'module' || def.shape === 'dip';
+export const isSocketStrip = (type: string): boolean => byId.get(type)?.shape === 'socket';
+
 export const getDef = (id: string): PartDef | undefined => byId.get(id);
 
 export function defaultProps(def: PartDef): Record<string, PropValue> {
@@ -593,12 +727,13 @@ export interface PlacedPin extends Hole {
 }
 
 /** Board holes occupied by a placed part's pins. */
-export function pinHoles(inst: Pick<PartInstance, 'type' | 'pos' | 'rot' | 'props'>): PlacedPin[] {
+export function pinHoles(inst: Pick<PartInstance, 'type' | 'pos' | 'rot' | 'props' | 'side'>): PlacedPin[] {
   const def = getDef(inst.type);
   if (!def) return [];
   const o = toHole(inst.pos);
   return def.resolve(inst.props).pins.map((p, index) => {
-    const [x, y] = rotate(p.x, p.y, inst.rot);
+    // A part on the underside is flipped over, which mirrors its footprint.
+    const [x, y] = rotate(inst.side === 'bottom' ? -p.x : p.x, p.y, inst.rot);
     return { name: p.name, index, c: o.c + x, r: o.r + y };
   });
 }

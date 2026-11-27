@@ -20,6 +20,10 @@ export interface PartInstance {
   pos: Vec;
   /** Quarter turns, 0..3. */
   rot: number;
+  /** Board face the part is mounted on. Defaults to top. */
+  side?: Side;
+  /** Mounted on its own female header socket instead of soldered directly. */
+  socket?: boolean;
   note?: string;
   props: Record<string, PropValue>;
 }
@@ -104,6 +108,8 @@ export function parseDesign(text: string): Design {
       ref: String(p.ref ?? '?'),
       pos: { x: Number(p.pos?.x) || 0, y: Number(p.pos?.y) || 0 },
       rot: (((Number(p.rot) || 0) % 4) + 4) % 4,
+      side: p.side === 'bottom' ? 'bottom' : undefined,
+      socket: p.socket === true ? true : undefined,
       note: typeof p.note === 'string' ? p.note : undefined,
       props: p.props && typeof p.props === 'object' ? p.props : {},
     })),

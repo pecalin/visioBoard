@@ -2,7 +2,7 @@
 
 import { parseDesign, toHole } from './model';
 import { Editor, Tool, loadExample } from './editor';
-import { PARTS, getDef, pinHoles } from './parts';
+import { PARTS, canSocket, getDef, pinHoles } from './parts';
 
 const WIRE_COLORS = ['#e5484d', '#1c1c1f', '#3e63dd', '#f5d90a', '#30a46c', '#f76b15', '#ffffff', '#8e4ec6'];
 
@@ -154,7 +154,7 @@ export function initUI(ed: Editor) {
     const origin = toHole(part.pos);
     inspector.append(
       el('h2', {}, part.ref),
-      el('div', { class: 'sub' }, `${def.name} · pin 1 at col ${origin.c + 1}, row ${origin.r + 1}`),
+      el('div', { class: 'sub' }, `${def.name} · ${part.side === 'bottom' ? 'bottom' : 'top'} side · pin 1 at col ${origin.c + 1}, row ${origin.r + 1}`),
     );
     const note = el('input', { type: 'text', value: part.note ?? '', placeholder: 'e.g. 10 kΩ, 100 nF' });
     note.onchange = () => ed.setNote(part.id, note.value.trim());
@@ -168,11 +168,18 @@ export function initUI(ed: Editor) {
         inspector.append(el('label', { class: 'row' }, p.label, input));
       }
     }
+    if (canSocket(def)) {
+      const box = el('input', { type: 'checkbox', checked: !!part.socket });
+      box.onchange = () => ed.setSocket(part.id, box.checked);
+      inspector.append(el('label', { class: 'row', title: 'Mount on a female header socket so the board can be unplugged' }, 'On socket', box));
+    }
+    const flip = el('button', { title: 'Mount on the other side of the board (F)' }, part.side === 'bottom' ? 'To top side' : 'To bottom side');
+    flip.onclick = () => ed.flipSelection();
     const rot = el('button', { title: 'Rotate 90° (R)' }, 'Rotate');
     rot.onclick = () => ed.rotateSelection();
     const del = el('button', { class: 'danger', title: 'Delete (Del)' }, 'Delete');
     del.onclick = () => ed.deleteSelection();
-    inspector.append(el('div', { class: 'row buttons' }, rot, del), el('h3', {}, 'Pins'));
+    inspector.append(el('div', { class: 'row buttons' }, rot, flip, del), el('h3', {}, 'Pins'));
 
     const table = el('table');
     for (const pin of pinHoles(part)) {

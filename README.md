@@ -11,7 +11,8 @@ Everything runs client-side, so it hosts on GitHub Pages with no backend.
 - 3D board with orbit, top and bottom (solder side) views
 - About 35 low-poly parts: ESP32 variants, Arduino Nano, Pi Pico, TCA9548A,
   level shifters, shift registers, sensors, passives, connectors
-- Jumper wires and solder bridges on either side of the board
+- Parts, jumper wires and solder bridges on either side of the board
+- Female header sockets: as strips you plug boards into, or as an "On socket" option per board
 - Net tracing: hover a pin to see everything joined to it; short-circuit warnings
 - Adjustable row spacing, lead spacing and header length per part
 - Undo/redo, autosave in the browser, save/open as a JSON file, PNG export
@@ -23,6 +24,7 @@ Everything runs client-side, so it hosts on GitHub Pages with no backend.
 | Orbit / pan / zoom | Drag / right-drag / wheel |
 | Select, Wire, Bridge, Erase | `V`, `W`, `B`, `E` |
 | Rotate part | `R` |
+| Move part to the other side | `F` |
 | Delete selection | `Del` |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Y` |
 | Cancel | `Esc` |

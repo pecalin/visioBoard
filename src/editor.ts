@@ -1,8 +1,8 @@
 // Editing logic: tools, selection, undo/redo, validation and persistence.
 
-import { Design, Hole, Link, PITCH as P, PartInstance, PropValue, emptyDesign, holeKey, linkHoles, parseDesign, sameHole, toHole, toVec, uid } from './model';
+import { Design, Hole, Link, PITCH as P, PartInstance, PropValue, Side, emptyDesign, holeKey, linkHoles, parseDesign, sameHole, toHole, toVec, uid } from './model';
 import { NetInfo, NetPin, computeNets } from './nets';
-import { defaultProps, getDef, pinHoles } from './parts';
+import { canSocket, defaultProps, getDef, isSocketStrip, pinHoles } from './parts';
 import { Picked, View } from './scene';
 
 export type Tool = 'select' | 'place' | 'wire' | 'bridge' | 'erase';
@@ -146,7 +146,16 @@ export class Editor {
   fits(inst: PartInstance): boolean {
     const holes = pinHoles(inst);
     if (!holes.every((h) => this.inBoard(h))) return false;
-    return holes.every((h) => (this.pinsAt.get(holeKey(h)) ?? []).every((p) => p.partId === inst.id));
+    const strip = isSocketStrip(inst.type);
+    const side = inst.side ?? 'top';
+    return holes.every((h) => {
+      const others = (this.pinsAt.get(holeKey(h)) ?? []).filter((p) => p.partId !== inst.id);
+      if (!others.length) return true;
+      if (others.length > 1) return false;
+      // One part may plug into one socket strip on the same side of the board.
+      const other = this.design.parts.find((p) => p.id === others[0].partId)!;
+      return isSocketStrip(other.type) !== strip && (other.side ?? 'top') === side;
+    });
   }
 
   /** Other pins electrically joined to the given hole. */
@@ -181,7 +190,7 @@ export class Editor {
     this.selection = null;
     this.placing = { id: 'ghost', type, ref: '', pos: { x: 0, y: 0 }, rot: 0, props: defaultProps(def) };
     this.setTool('place');
-    this.status = `Placing ${def.name}: click a hole. R rotates, Esc cancels.`;
+    this.status = `Placing ${def.name}: click a hole. It mounts on the side you are viewing. R rotates, Esc cancels.`;
     this.refresh(false);
   }
 
@@ -203,6 +212,34 @@ export class Editor {
     const turned = { ...part, rot: (part.rot + 1) % 4 };
     if (!this.fits(turned)) return this.say('No room to rotate here: move the part first.');
     this.mutate(() => (part.rot = turned.rot));
+  }
+
+  /** Move the selected part to the other face of the board. */
+  flipSelection() {
+    const part = this.selectedPart();
+    if (!part) return;
+    const side: Side | undefined = (part.side ?? 'top') === 'top' ? 'bottom' : undefined;
+    // Flipping mirrors the footprint, so shift the origin to keep the part over the same holes.
+    const corner = (p: PartInstance) => {
+      const hs = pinHoles(p);
+      return { c: Math.min(...hs.map((h) => h.c)), r: Math.min(...hs.map((h) => h.r)) };
+    };
+    const flipped: PartInstance = { ...part, side };
+    const from = corner(part);
+    const to = corner(flipped);
+    const o = toHole(part.pos);
+    flipped.pos = toVec({ c: o.c + from.c - to.c, r: o.r + from.r - to.r });
+    if (!this.fits(flipped)) return this.say('No room on the other side: flipping mirrors the pins. Move the part first.');
+    this.mutate(() => {
+      part.side = side;
+      part.pos = flipped.pos;
+    });
+  }
+
+  setSocket(id: string, on: boolean) {
+    const part = this.design.parts.find((p) => p.id === id);
+    const def = part && getDef(part.type);
+    if (part && def && canSocket(def)) this.mutate(() => (part.socket = on || undefined));
   }
 
   deleteSelection() {
@@ -275,10 +312,11 @@ export class Editor {
   }
 
   /** Place a part by type at a hole. Returns the instance, or null if it does not fit. */
-  addPart(type: string, at: Hole, rot = 0, props: Record<string, PropValue> = {}): PartInstance | null {
+  addPart(type: string, at: Hole, rot = 0, props: Record<string, PropValue> = {}, side: Side = 'top'): PartInstance | null {
     const def = getDef(type);
     if (!def) return null;
     const inst: PartInstance = { id: uid(), type, ref: this.nextRef(def.prefix), pos: toVec(at), rot, props: { ...defaultProps(def), ...props } };
+    if (side === 'bottom') inst.side = side;
     if (!this.fits(inst)) return null;
     this.mutate(() => this.design.parts.push(inst));
     return inst;
@@ -364,7 +402,7 @@ export class Editor {
       }
       case 'place': {
         if (!hole || !this.placing) break;
-        const made = this.addPart(this.placing.type, hole, this.placing.rot, this.placing.props);
+        const made = this.addPart(this.placing.type, hole, this.placing.rot, this.placing.props, this.view.viewSide());
         if (!made) this.say('Does not fit here: a pin is off the board or the hole is taken.');
         else this.say(`Placed ${made.ref}. Click to place another, Esc to stop.`);
         this.updateGhost();
@@ -401,6 +439,7 @@ export class Editor {
   private updateGhost() {
     if (this.tool !== 'place' || !this.placing || !this.hover) return this.view.setGhost(null);
     this.placing.pos = toVec(this.hover);
+    this.placing.side = this.view.viewSide() === 'bottom' ? 'bottom' : undefined;
     this.view.setGhost(this.placing, this.fits(this.placing));
   }
 
@@ -436,6 +475,7 @@ export class Editor {
     else if (k === 'b') this.setTool('bridge');
     else if (k === 'e') this.setTool('erase');
     else if (k === 'r') this.rotateSelection();
+    else if (k === 'f') this.flipSelection();
     else if (k === 'delete' || k === 'backspace') this.deleteSelection();
   }
 }

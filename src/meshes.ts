@@ -3,13 +3,16 @@
 
 import * as THREE from 'three';
 import { PITCH as P, PartInstance } from './model';
-import { PartDef, Resolved, getDef } from './parts';
+import { PartDef, Resolved, canSocket, getDef } from './parts';
 
 export const BOARD_T = 1.6;
 const PIN_BOTTOM = -BOARD_T - 1.8;
 const GOLD = 0xd4a93a;
 const SILVER = 0xc4c9d0;
 const BLACK = 0x1a1a1c;
+/** Height of a female header socket body. */
+export const SOCKET_H = 8.5;
+const DIP_SOCKET_H = 3.2;
 const TEX_SCALE = 16; // texture pixels per mm
 
 const cache = new Map<string, THREE.MeshStandardMaterial>();
@@ -88,9 +91,9 @@ function moduleTexture(def: PartDef, res: Resolved): THREE.CanvasTexture {
       ctx.textAlign = pin.lx > 0 ? 'left' : 'right';
       ctx.fillText(pin.name, cx + pin.lx * 1.35 * S, cy);
     } else {
-      ctx.translate(cx, cy + 1.35 * S);
+      ctx.translate(cx, cy + pin.ly * 1.35 * S);
       ctx.rotate(Math.PI / 2);
-      ctx.textAlign = 'left';
+      ctx.textAlign = pin.ly > 0 ? 'left' : 'right';
       ctx.fillText(pin.name, 0, 0);
     }
     ctx.restore();
@@ -150,7 +153,7 @@ function buildModule(g: THREE.Group, def: PartDef, res: Resolved) {
   box(g, w, pcb, d, toppedMaterials(M(def.color), moduleTexture(def, res)), cx, stand + pcb / 2, cz);
   instanced(g, P - 0.1, stand, P - 0.1, M(BLACK), res.pins.map((p) => [p.x * P, stand / 2, p.y * P]));
   legs(g, res, top + 0.35, M(GOLD, true), 0.64);
-  for (const dc of def.decor) {
+  for (const dc of res.decor ?? def.decor) {
     const x = x0 + dc.u * w;
     const z = y0 + dc.v * d;
     if (dc.shape === 'box') box(g, dc.w, dc.h, dc.d, M(dc.color, dc.metal), x, top + dc.h / 2, z);
@@ -261,6 +264,11 @@ function buildFixed(g: THREE.Group, def: PartDef, res: Resolved) {
       box(g, 6.8, 4.8, 6.8, M(def.color), cx, 0.5 + 2.4, cz);
       cyl(g, 1.6, 0.4, M(0xc9a227, true), cx, 5.5, cz, 'y', 8);
       break;
+    case 'socket':
+      instanced(g, P - 0.04, SOCKET_H, P - 0.1, M(def.color), res.pins.map((p) => [p.x * P, SOCKET_H / 2, p.y * P]));
+      instanced(g, 0.95, 0.06, 0.95, M(0x050506), res.pins.map((p) => [p.x * P, SOCKET_H + 0.02, p.y * P]));
+      legs(g, res, 1, M(SILVER, true), 0.5);
+      break;
     case 'header':
       instanced(g, P - 0.1, 2.5, P - 0.1, M(def.color), res.pins.map((p) => [p.x * P, 1.25, p.y * P]));
       legs(g, res, 8.6, M(GOLD, true), 0.64);
@@ -268,17 +276,59 @@ function buildFixed(g: THREE.Group, def: PartDef, res: Resolved) {
   }
 }
 
+/** Ring of WS2812 LEDs on a short header, with the pins under the near edge of the ring. */
+function buildRing(g: THREE.Group, def: PartDef, res: Resolved, inst: PartInstance) {
+  const stand = 2.5;
+  const band = 7;
+  const R = (res.body.x1 - res.body.x0) / 2;
+  const cx = (res.body.x0 + res.body.x1) / 2;
+  const cz = R - band / 2;
+  const outline = new THREE.Shape().absarc(0, 0, R, 0, Math.PI * 2, false);
+  outline.holes.push(new THREE.Path().absarc(0, 0, R - band, 0, Math.PI * 2, true));
+  const pcb = new THREE.Mesh(new THREE.ExtrudeGeometry(outline, { depth: 1.2, bevelEnabled: false, curveSegments: 20 }), M(def.color));
+  pcb.rotation.x = -Math.PI / 2;
+  pcb.position.set(cx, stand, cz);
+  g.add(pcb);
+  instanced(g, P - 0.1, stand, P - 0.1, M(BLACK), res.pins.map((p) => [p.x * P, stand / 2, p.y * P]));
+  legs(g, res, stand + 1.4, M(GOLD, true), 0.64);
+  const n = Math.max(1, Math.round(Number(inst.props.count) || 12));
+  const leds = new THREE.InstancedMesh(new THREE.BoxGeometry(4.4, 1.6, 4.4), M(0xf4f4f0), n);
+  const t = new THREE.Object3D();
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    t.position.set(cx + Math.sin(a) * (R - band / 2), stand + 1.2 + 0.8, cz + Math.cos(a) * (R - band / 2));
+    t.rotation.y = a;
+    t.updateMatrix();
+    leds.setMatrixAt(i, t.matrix);
+  }
+  g.add(leds);
+}
+
 /** Build the mesh group for a part, in its local frame (unrotated, origin at pin 1). */
-export function buildPart(inst: PartInstance): THREE.Group {
-  const g = new THREE.Group();
+export function buildPart(inst: PartInstance, onStrip = false): THREE.Group {
+  const root = new THREE.Group();
   const def = getDef(inst.type);
-  if (!def) return g;
+  if (!def) return root;
   const res = def.resolve(inst.props);
+  // Raise the part when it is plugged into socket strips, or carries its own socket.
+  let g = root;
+  const own = !!inst.socket && canSocket(def) && !onStrip;
+  const lift = onStrip && def.shape !== 'socket' ? SOCKET_H : own ? (def.shape === 'dip' ? DIP_SOCKET_H : SOCKET_H) : 0;
+  if (lift) {
+    g = new THREE.Group();
+    g.position.y = lift;
+    root.add(g);
+  }
+  if (own) {
+    instanced(root, P - 0.04, lift, P - 0.1, M(BLACK), res.pins.map((p) => [p.x * P, lift / 2, p.y * P]));
+    legs(root, res, 1);
+  }
   if (def.shape === 'module') buildModule(g, def, res);
   else if (def.shape === 'dip') buildDip(g, def, res);
+  else if (def.shape === 'ring') buildRing(g, def, res, inst);
   else if (def.props.some((p) => p.key === 'span')) buildTwoLead(g, def, res, inst);
   else buildFixed(g, def, res);
-  return g;
+  return root;
 }
 
 /** Make every material in a group translucent (for placement previews). */
