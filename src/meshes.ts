@@ -332,14 +332,14 @@ export function buildPart(inst: PartInstance, onStrip = false): THREE.Group {
 }
 
 /** Make every material in a group translucent (for placement previews). */
-export function ghostify(g: THREE.Object3D, ok: boolean) {
+export function ghostify(g: THREE.Object3D, ok: boolean, opacity = ok ? 0.6 : 0.3) {
   g.traverse((o) => {
     const mesh = o as THREE.Mesh;
     if (!mesh.isMesh) return;
     const conv = (m: THREE.Material) => {
       const c = (m as THREE.MeshStandardMaterial).clone();
       c.transparent = true;
-      c.opacity = ok ? 0.6 : 0.3;
+      c.opacity = opacity;
       c.depthWrite = false;
       if (!ok) c.color.set(0xff4040);
       c.userData.own = true;

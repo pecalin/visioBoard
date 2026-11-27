@@ -1,11 +1,11 @@
 // Editing logic: tools, selection, undo/redo, validation and persistence.
 
-import { Design, Hole, Link, PITCH as P, PartInstance, PropValue, Side, emptyDesign, holeKey, linkHoles, parseDesign, sameHole, toHole, toVec, uid } from './model';
+import { Design, Display, DupontEnds, Hole, Link, PITCH as P, PartInstance, PropValue, Side, emptyDesign, holeKey, linkHoles, parseDesign, sameHole, toHole, toVec, uid } from './model';
 import { NetInfo, NetPin, computeNets } from './nets';
 import { canSocket, defaultProps, getDef, isSocketStrip, pinHoles } from './parts';
 import { Picked, View } from './scene';
 
-export type Tool = 'select' | 'place' | 'wire' | 'bridge' | 'erase';
+export type Tool = 'select' | 'place' | 'wire' | 'bridge' | 'dupont' | 'erase';
 
 export interface Hover {
   x: number;
@@ -23,6 +23,8 @@ export class Editor {
   tool: Tool = 'select';
   selection: Picked | null = null;
   wireColor = '#e5484d';
+  /** Connectors for new Dupont cables: first click, then second click. */
+  dupontEnds: DupontEnds = 'ff';
   status = '';
   placing: PartInstance | null = null;
   /** Called after any change to the design, selection, tool or status. */
@@ -191,6 +193,8 @@ export class Editor {
         ? 'Wire: click a hole or an off-board pin, then a second one. Flip the board to wire the other side.'
         : t === 'bridge'
           ? 'Solder bridge: click a pad, then another pad in a straight line.'
+          : t === 'dupont'
+            ? 'Dupont cable: click a pin or hole, then a second one. Pick F-F, M-F or M-M in the toolbar.'
           : t === 'erase'
             ? 'Erase: click a part, wire or bridge.'
             : '';
@@ -250,6 +254,25 @@ export class Editor {
     });
   }
 
+  /** Draw one part solid, see-through or not at all. */
+  setShow(id: string, show: Display) {
+    const part = this.design.parts.find((p) => p.id === id);
+    if (part) this.mutate(() => (part.show = show === 'solid' ? undefined : show));
+  }
+
+  /** Step every part through solid, see-through and hidden. This is a view setting, not saved in the design. */
+  cyclePartsDisplay() {
+    const order: Display[] = ['solid', 'ghost', 'hidden'];
+    this.view.partsDisplay = order[(order.indexOf(this.view.partsDisplay) + 1) % 3];
+    this.refresh(false);
+  }
+
+  /** Select a part or link by id, for example a hidden part from the side panel. */
+  select(pick: Picked | null) {
+    this.selection = pick;
+    this.refresh(false);
+  }
+
   setSocket(id: string, on: boolean) {
     const part = this.design.parts.find((p) => p.id === id);
     const def = part && getDef(part.type);
@@ -279,6 +302,11 @@ export class Editor {
   setNote(id: string, note: string) {
     const part = this.design.parts.find((p) => p.id === id);
     if (part) this.mutate(() => (part.note = note || undefined));
+  }
+
+  setLinkEnds(id: string, ends: DupontEnds) {
+    const link = this.design.links.find((l) => l.id === id);
+    if (link?.kind === 'dupont') this.mutate(() => (link.ends = ends));
   }
 
   setLinkColor(id: string, color: string) {
@@ -348,9 +376,11 @@ export class Editor {
     return inst;
   }
 
-  addLink(kind: Link['kind'], a: Hole, b: Hole, side = this.view.viewSide(), color = this.wireColor) {
+  addLink(kind: Link['kind'], a: Hole, b: Hole, side = this.view.viewSide(), color = this.wireColor, ends = this.dupontEnds) {
     if (!this.inBoard(a) && !this.inBoard(b)) side = 'top'; // bench to bench: nothing to go under
-    this.mutate(() => this.design.links.push({ id: uid(), kind, side, a: toVec(a), b: toVec(b), color: kind === 'wire' ? color : '#d9dde3' }));
+    const link: Link = { id: uid(), kind, side, a: toVec(a), b: toVec(b), color: kind === 'bridge' ? '#d9dde3' : color };
+    if (kind === 'dupont') link.ends = ends;
+    this.mutate(() => this.design.links.push(link));
   }
 
   // ── Pointer handling ──────────────────────────────────────────────────
@@ -391,7 +421,7 @@ export class Editor {
     this.hover = hole;
     if (changed) {
       this.updateGhost();
-      if (this.start && hole) this.view.setPreview(this.start, this.snap(hole), this.view.viewSide(), this.tool === 'wire' ? this.wireColor : '#d9dde3');
+      if (this.start && hole) this.view.setPreview(this.start, this.snap(hole), this.view.viewSide(), this.tool === 'bridge' ? '#d9dde3' : this.wireColor);
       this.applyHighlight();
     }
     this.onHover(hole ? { x: e.clientX, y: e.clientY, text: this.describe(hole) } : null);
@@ -436,6 +466,7 @@ export class Editor {
         break;
       }
       case 'wire':
+      case 'dupont':
       case 'bridge': {
         if (!hole) break;
         if (this.tool === 'bridge' && !this.inBoard(hole)) {
@@ -505,10 +536,12 @@ export class Editor {
     } else if (k === 'v') this.setTool('select');
     else if (k === 'w') this.setTool('wire');
     else if (k === 'b') this.setTool('bridge');
+    else if (k === 'd') this.setTool('dupont');
     else if (k === 'e') this.setTool('erase');
     else if (k === 'r') this.rotateSelection();
     else if (k === 'f') this.flipSelection();
     else if (k === 'g') this.toggleGrid();
+    else if (k === 'x') this.cyclePartsDisplay();
     else if (k === 'delete' || k === 'backspace') this.deleteSelection();
   }
 }

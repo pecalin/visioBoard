@@ -2,9 +2,9 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { Design, Hole, Link, PITCH as P, PartInstance, Side, holeKey, toHole } from './model';
+import { Design, Display, Hole, Link, PITCH as P, PartInstance, Side, holeKey, toHole } from './model';
 import { isSocketStrip, pinHoles } from './parts';
-import { BOARD_T, M, buildPart, disposeGroup, ghostify } from './meshes';
+import { BOARD_T, M, SOCKET_H, buildPart, disposeGroup, ghostify } from './meshes';
 
 export type Picked = { kind: 'part' | 'link'; id: string };
 
@@ -29,6 +29,8 @@ export class View {
   private ray = new THREE.Raycaster();
   private board = { cols: 0, rows: 0 };
   private dirty = true;
+  /** Display applied to every part, on top of each part's own setting. */
+  partsDisplay: Display = 'solid';
 
   constructor(private host: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
@@ -190,13 +192,47 @@ export class View {
     return g;
   }
 
-  private buildLink(l: Link, selected: boolean): THREE.Mesh {
+  /** Plug-in jumper cable: an upright connector housing on each end and a wire arcing between them. */
+  private buildDupont(l: Link, a: THREE.Vector3, b: THREE.Vector3, selected: boolean): THREE.Group {
+    const s = l.side === 'top' ? 1 : -1;
+    const H = 14;
+    const g = new THREE.Group();
+    const ends = l.ends ?? 'ff';
+    // Returns the point where the wire leaves the housing.
+    const plug = (p: THREE.Vector3, hole: Hole, male: boolean) => {
+      let base = p.y;
+      if (male) {
+        if (this.stripHoles.has(`${l.side}:${holeKey(hole)}`)) base += s * SOCKET_H;
+        const pin = new THREE.Mesh(new THREE.BoxGeometry(0.64, 6, 0.64), M(0xc8ccd0, true));
+        pin.position.set(p.x, base, p.z);
+        g.add(pin);
+        base += s * 3;
+      }
+      const shell = new THREE.Mesh(new THREE.BoxGeometry(2.4, H, 2.4), M(0x18181b));
+      shell.position.set(p.x, base + (s * H) / 2, p.z);
+      g.add(shell);
+      return new THREE.Vector3(p.x, base + s * H, p.z);
+    };
+    const ta = plug(a, toHole(l.a), ends[0] === 'm');
+    const tb = plug(b, toHole(l.b), ends[1] === 'm');
+    const up = s * Math.min(40, Math.max(10, ta.distanceTo(tb) * 0.4));
+    const curve = new THREE.CubicBezierCurve3(ta, ta.clone().setY(ta.y + up), tb.clone().setY(tb.y + up), tb);
+    const mat = new THREE.MeshStandardMaterial({ color: l.color, roughness: 0.6, flatShading: true });
+    mat.userData.own = true;
+    if (selected) mat.emissive.set(SELECT).multiplyScalar(0.6);
+    g.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 24, 0.6, 6), mat));
+    g.userData.linkId = l.id;
+    return g;
+  }
+
+  private buildLink(l: Link, selected: boolean): THREE.Object3D {
     const top = l.side === 'top';
     const y = top ? 0.02 : -BOARD_T - 0.02;
     // An end beside the board meets the pin of a part lying on the bench.
     const end = (v: { x: number; y: number }) => new THREE.Vector3(v.x, this.onBoard(toHole(v)) ? y : -BOARD_T + 0.02, v.y);
     const a = end(l.a);
     const b = end(l.b);
+    if (l.kind === 'dupont') return this.buildDupont(l, a, b, selected);
     const len = a.distanceTo(b);
     let mesh: THREE.Mesh;
     if (l.kind === 'wire') {
@@ -231,12 +267,18 @@ export class View {
     for (const part of d.parts) {
       const g = this.mount(part);
       g.userData.partId = part.id;
-      this.partsGroup.add(g);
       if (selection?.kind === 'part' && selection.id === part.id) {
         g.updateMatrixWorld(true);
         const helper = new THREE.BoxHelper(g, SELECT);
         this.linksGroup.add(helper);
       }
+      const show = this.partsDisplay === 'hidden' || part.show === 'hidden' ? 'hidden' : this.partsDisplay === 'ghost' ? 'ghost' : (part.show ?? 'solid');
+      if (show === 'hidden') {
+        disposeGroup(g); // a hidden part keeps only its selection outline, and cannot be clicked
+        continue;
+      }
+      if (show === 'ghost') ghostify(g, true, 0.22);
+      this.partsGroup.add(g);
     }
     for (const l of d.links) this.linksGroup.add(this.buildLink(l, selection?.kind === 'link' && selection.id === l.id));
     this.dirty = true;
@@ -306,6 +348,7 @@ export class View {
   private aim(e: { clientX: number; clientY: number }) {
     const rect = this.renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+    this.camera.updateMatrixWorld(); // the view may have changed since the last rendered frame
     this.ray.setFromCamera(ndc, this.camera);
   }
 

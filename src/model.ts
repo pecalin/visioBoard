@@ -12,6 +12,9 @@ export interface Vec {
 
 export type PropValue = number | string;
 
+/** How a part is drawn: normally, see-through, or not at all. */
+export type Display = 'solid' | 'ghost' | 'hidden';
+
 export interface PartInstance {
   id: string;
   type: string;
@@ -24,14 +27,24 @@ export interface PartInstance {
   side?: Side;
   /** Mounted on its own female header socket instead of soldered directly. */
   socket?: boolean;
+  /** Drawn see-through or hidden, to reveal what is under it. Defaults to solid. */
+  show?: 'ghost' | 'hidden';
   note?: string;
   props: Record<string, PropValue>;
 }
 
+/** Connectors on a Dupont cable, first end then second end: female or male. */
+export type DupontEnds = 'ff' | 'mf' | 'mm';
+
 export interface Link {
   id: string;
-  /** wire: insulated jumper between two holes. bridge: solder joining every pad on a straight line. */
-  kind: 'wire' | 'bridge';
+  /**
+   * wire: insulated jumper soldered between two holes. bridge: solder joining every pad on a
+   * straight line. dupont: plug-in jumper cable with a connector housing on each end.
+   */
+  kind: 'wire' | 'bridge' | 'dupont';
+  /** Dupont only: connector on end a, then on end b. */
+  ends?: DupontEnds;
   side: Side;
   a: Vec;
   b: Vec;
@@ -76,7 +89,7 @@ export function emptyDesign(cols = 24, rows = 18): Design {
 export function linkHoles(l: Link): Hole[] {
   const a = toHole(l.a);
   const b = toHole(l.b);
-  if (l.kind === 'wire') return [a, b];
+  if (l.kind !== 'bridge') return [a, b];
   const n = Math.max(Math.abs(b.c - a.c), Math.abs(b.r - a.r));
   const sc = Math.sign(b.c - a.c);
   const sr = Math.sign(b.r - a.r);
@@ -110,12 +123,14 @@ export function parseDesign(text: string): Design {
       rot: (((Number(p.rot) || 0) % 4) + 4) % 4,
       side: p.side === 'bottom' ? 'bottom' : undefined,
       socket: p.socket === true ? true : undefined,
+      show: p.show === 'ghost' || p.show === 'hidden' ? p.show : undefined,
       note: typeof p.note === 'string' ? p.note : undefined,
       props: p.props && typeof p.props === 'object' ? p.props : {},
     })),
     links: d.links.map((l: any) => ({
       id: String(l.id ?? uid()),
-      kind: l.kind === 'bridge' ? 'bridge' : 'wire',
+      kind: l.kind === 'bridge' || l.kind === 'dupont' ? l.kind : 'wire',
+      ends: l.kind === 'dupont' ? (l.ends === 'mf' || l.ends === 'mm' ? l.ends : 'ff') : undefined,
       side: l.side === 'top' ? 'top' : 'bottom',
       a: { x: Number(l.a?.x) || 0, y: Number(l.a?.y) || 0 },
       b: { x: Number(l.b?.x) || 0, y: Number(l.b?.y) || 0 },

@@ -19,13 +19,16 @@
           <button data-tool="select" title="Select and move (V)">Select</button>
           <button data-tool="wire" title="Jumper wire between two holes (W)">Wire</button>
           <button data-tool="bridge" title="Solder bridge along a line of pads (B)">Bridge</button>
+          <button data-tool="dupont" title="Plug-in Dupont jumper cable through the air (D)">Dupont</button>
           <button data-tool="erase" title="Erase (E)">Erase</button>
         </div>
         <div class="group" id="colors" title="Wire colour"></div>
+        <div class="group" id="ends" title="Dupont cable connectors"></div>
         <div class="group">
           <button id="view-top" title="Look at the component side">Top</button>
           <button id="view-bottom" title="Flip to the solder side">Bottom</button>
           <button id="view-3d" title="Angled view">3D</button>
+          <button id="parts-display" title="Show all parts solid, see-through or hidden (X)">Parts: solid</button>
           <button id="grid" title="Show or hide the grid around the board (G)">Grid</button>
         </div>
         <div class="group">
@@ -58,7 +61,7 @@
 
       <footer id="status">
         <span id="message"></span>
-        <span class="hint">Drag: orbit · Right-drag: pan · Wheel: zoom · R: rotate · F: flip side · G: grid · Del: delete</span>
+        <span class="hint">Drag: orbit · Right-drag: pan · Wheel: zoom · R: rotate · F: flip side · G: grid · X: see-through · Del: delete</span>
       </footer>
     </div>
     <script type="module" src="/src/main.ts"></script>

@@ -518,6 +518,23 @@ export const PARTS: PartDef[] = [
       { shape: 'box', u: 0.72, v: 0.5, w: 8, d: 10.2, h: 8, color: 0x2a6fd6 },
     ],
   }),
+  // Small blue auto-direction board: 5-pin logic header on one edge, 3-pin bus header on the other.
+  dual({
+    id: 'max3485-mini',
+    name: 'MAX3485 RS-485 mini board',
+    category: 'Breakout boards',
+    left: ['VCC', 'TXD', 'RXD', 'EN', 'GND'],
+    right: ['A', 'B', 'GND'],
+    rowSpan: 3,
+    color: 0x1f5fc4,
+    side: 1.5,
+    top: 1.5,
+    bottom: 1.5,
+    decor: [
+      { shape: 'box', u: 0.5, v: 0.42, w: 4, d: 5, h: 1.5, color: CHIP },
+      { shape: 'box', u: 0.5, v: 0.86, w: 1.6, d: 0.9, h: 0.6, color: 0xf4f4f0 },
+    ],
+  }),
   dual({
     id: 'level-shifter-4',
     name: 'Logic level shifter (4-ch)',

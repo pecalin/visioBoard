@@ -28,7 +28,7 @@ body {
 #app {
   display: grid;
   height: 100%;
-  grid-template: 'top top top' 44px 'palette view inspector' 1fr 'status status status' 26px / 230px 1fr 270px;
+  grid-template: 'top top top' auto 'palette view inspector' 1fr 'status status status' 26px / 230px 1fr 270px;
 }
 
 button,
@@ -83,11 +83,12 @@ input[type='number'] {
   grid-area: top;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 0 10px;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  min-height: 44px;
+  padding: 6px 10px;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
-  overflow-x: auto;
 }
 .brand {
   display: flex;
@@ -181,6 +182,7 @@ h3 {
 }
 #viewport.tool-place canvas,
 #viewport.tool-wire canvas,
+#viewport.tool-dupont canvas,
 #viewport.tool-bridge canvas {
   cursor: crosshair;
 }
@@ -323,7 +325,7 @@ td.joined {
 
 @media (max-width: 900px) {
   #app {
-    grid-template: 'top top' 44px 'palette view' 1fr 'inspector inspector' 180px 'status status' 26px / 170px 1fr;
+    grid-template: 'top top' auto 'palette view' 1fr 'inspector inspector' 180px 'status status' 26px / 170px 1fr;
   }
   #inspector {
     border-left: 0;

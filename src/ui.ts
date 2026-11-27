@@ -1,10 +1,18 @@
 // DOM user interface: toolbar, parts palette, inspector, file handling.
 
-import { parseDesign, toHole } from './model';
+import { Display, DupontEnds, parseDesign, toHole } from './model';
 import { Editor, Tool, loadExample } from './editor';
 import { PARTS, canSocket, getDef, pinHoles } from './parts';
 
 const WIRE_COLORS = ['#e5484d', '#1c1c1f', '#3e63dd', '#f5d90a', '#30a46c', '#f76b15', '#ffffff', '#8e4ec6'];
+
+const DUPONT_ENDS: [DupontEnds, string, string][] = [
+  ['ff', 'F-F', 'female to female'],
+  ['mf', 'M-F', 'male (first click) to female (second click)'],
+  ['mm', 'M-M', 'male to male'],
+];
+
+const DISPLAY: Record<Display, string> = { solid: 'Solid', ghost: 'See-through', hidden: 'Hidden' };
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -44,10 +52,22 @@ export function initUI(ed: Editor) {
     b.onclick = () => {
       const link = ed.selectedLink();
       ed.wireColor = c;
-      if (link?.kind === 'wire') ed.setLinkColor(link.id, c);
+      if (link && link.kind !== 'bridge') ed.setLinkColor(link.id, c);
       else render();
     };
     $('colors').append(b);
+    return b;
+  });
+
+  const endButtons = DUPONT_ENDS.map(([ends, label, hint]) => {
+    const b = el('button', { title: `Dupont cable: ${hint}` }, label);
+    b.onclick = () => {
+      const link = ed.selectedLink();
+      ed.dupontEnds = ends;
+      if (link?.kind === 'dupont') ed.setLinkEnds(link.id, ends);
+      else render();
+    };
+    $('ends').append(b);
     return b;
   });
 
@@ -55,6 +75,7 @@ export function initUI(ed: Editor) {
   $('view-bottom').onclick = () => (ed.view.setView('bottom'), render());
   $('view-3d').onclick = () => (ed.view.setView('3d'), render());
   $('grid').onclick = () => ed.toggleGrid();
+  $('parts-display').onclick = () => ed.cyclePartsDisplay();
   $('undo').onclick = () => ed.undo();
   $('redo').onclick = () => ed.redo();
 
@@ -171,6 +192,10 @@ export function initUI(ed: Editor) {
         inspector.append(el('label', { class: 'row' }, p.label, input));
       }
     }
+    const show = el('select');
+    for (const k of Object.keys(DISPLAY) as Display[]) show.append(el('option', { value: k, selected: (part.show ?? 'solid') === k }, DISPLAY[k]));
+    show.onchange = () => ed.setShow(part.id, show.value as Display);
+    inspector.append(el('label', { class: 'row', title: 'Draw this part see-through or hide it to reveal what is under it' }, 'Display', show));
     if (canSocket(def)) {
       const box = el('input', { type: 'checkbox', checked: !!part.socket });
       box.onchange = () => ed.setSocket(part.id, box.checked);
@@ -201,10 +226,12 @@ export function initUI(ed: Editor) {
     const at = (h: { c: number; r: number }) =>
       h.c >= 0 && h.r >= 0 && h.c < cols && h.r < rows ? `col ${h.c + 1}, row ${h.r + 1}` : 'beside the board';
     inspector.append(
-      el('h2', {}, link.kind === 'wire' ? 'Jumper wire' : 'Solder bridge'),
+      el('h2', {}, link.kind === 'wire' ? 'Jumper wire' : link.kind === 'dupont' ? `Dupont cable (${DUPONT_ENDS.find((e) => e[0] === (link.ends ?? 'ff'))![1]})` : 'Solder bridge'),
       el('div', { class: 'sub' }, `${link.side === 'top' ? 'Top' : 'Bottom'} side · ${at(a)} → ${at(b)}`),
     );
     if (link.kind === 'wire') inspector.append(el('div', { class: 'sub' }, 'Pick a colour in the toolbar to recolour this wire.'));
+    if (link.kind === 'dupont')
+      inspector.append(el('div', { class: 'sub' }, 'Pick a colour or F-F / M-F / M-M in the toolbar to change this cable.'));
     const del = el('button', { class: 'danger' }, 'Delete');
     del.onclick = () => ed.deleteSelection();
     inspector.append(el('div', { class: 'row buttons' }, del));
@@ -228,6 +255,16 @@ export function initUI(ed: Editor) {
       inspector.append(el('h3', {}, 'Warnings'));
       for (const w of ed.nets.warnings) inspector.append(hoverable(el('div', { class: 'warn' }, w.text), w.netId));
     }
+    if (ed.design.parts.length) {
+      inspector.append(el('h3', {}, `Parts (${ed.design.parts.length})`));
+      for (const p of ed.design.parts) {
+        const tag = p.show ? ` · ${DISPLAY[p.show].toLowerCase()}` : '';
+        const row = el('div', { class: 'net', title: 'Click to select' }, `${p.ref} · ${getDef(p.type)?.name ?? p.type}${tag}`);
+        row.style.cursor = 'pointer';
+        row.onclick = () => ed.select({ kind: 'part', id: p.id });
+        inspector.append(row);
+      }
+    }
     inspector.append(el('h3', {}, `Connections (${nets.length})`));
     if (!nets.length)
       inspector.append(el('div', { class: 'sub' }, 'Nothing is joined yet. Pick a part on the left, click a hole (or a spot beside the board) to place it, then use Wire or Bridge.'));
@@ -237,8 +274,12 @@ export function initUI(ed: Editor) {
   // ── Render ──────────────────────────────────────────────────────────
   function render() {
     for (const b of toolButtons) b.classList.toggle('active', b.dataset.tool === ed.tool);
+    const shownEnds = (ed.selectedLink()?.kind === 'dupont' && ed.selectedLink()!.ends) || ed.dupontEnds;
+    endButtons.forEach((b, i) => b.classList.toggle('active', DUPONT_ENDS[i][0] === shownEnds));
     swatches.forEach((b, i) => b.classList.toggle('active', WIRE_COLORS[i] === ed.wireColor));
     $('grid').classList.toggle('active', ed.view.grid);
+    $('parts-display').textContent = `Parts: ${DISPLAY[ed.view.partsDisplay].toLowerCase()}`;
+    $('parts-display').classList.toggle('active', ed.view.partsDisplay !== 'solid');
     ($('undo') as HTMLButtonElement).disabled = !ed.canUndo;
     ($('redo') as HTMLButtonElement).disabled = !ed.canRedo;
     if (document.activeElement !== name) name.value = ed.design.name;
