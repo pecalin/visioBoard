@@ -10,12 +10,16 @@ export type Picked = { kind: 'part' | 'link'; id: string };
 
 const SELECT = 0xffd23f;
 
+/** How far the bench around the board reaches, in holes. Parts can sit anywhere on it. */
+export const BENCH = 40;
+
 export class View {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(40, 1, 1, 4000);
   readonly controls: OrbitControls;
   private boardGroup = new THREE.Group();
+  private gridGroup = new THREE.Group();
   private partsGroup = new THREE.Group();
   private linksGroup = new THREE.Group();
   private overlay = new THREE.Group();
@@ -31,7 +35,7 @@ export class View {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     host.appendChild(this.renderer.domElement);
     this.scene.background = new THREE.Color(0x14171d);
-    this.scene.add(this.boardGroup, this.partsGroup, this.linksGroup, this.overlay);
+    this.scene.add(this.boardGroup, this.gridGroup, this.partsGroup, this.linksGroup, this.overlay);
 
     this.scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8f9c, 1.5));
     const key = new THREE.DirectionalLight(0xffffff, 1.6);
@@ -130,6 +134,38 @@ export class View {
     mk(new THREE.CircleGeometry(0.5, 12), holeMat, 0.012, false);
     mk(new THREE.RingGeometry(0.5, 1.02, 12), padMat, -BOARD_T - 0.01, true);
     mk(new THREE.CircleGeometry(0.5, 12), holeMat, -BOARD_T - 0.012, true);
+    this.buildGrid(cols, rows);
+  }
+
+  /** Bench grid around the board: one line per hole pitch, so crossings are where pins snap. */
+  private buildGrid(cols: number, rows: number) {
+    this.clear(this.gridGroup);
+    const y = -BOARD_T / 2; // inside the board's thickness, so the board hides it from both faces
+    const x0 = -BENCH * P;
+    const x1 = (cols - 1 + BENCH) * P;
+    const z0 = -BENCH * P;
+    const z1 = (rows - 1 + BENCH) * P;
+    const pts: number[] = [];
+    for (let c = -BENCH; c < cols + BENCH; c++) pts.push(c * P, y, z0, c * P, y, z1);
+    for (let r = -BENCH; r < rows + BENCH; r++) pts.push(x0, y, r * P, x1, y, r * P);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+    const mat = new THREE.LineBasicMaterial({ color: 0x3a4456, transparent: true, opacity: 0.55 });
+    mat.userData.own = true;
+    this.gridGroup.add(new THREE.LineSegments(geo, mat));
+  }
+
+  get grid(): boolean {
+    return this.gridGroup.visible;
+  }
+
+  setGrid(on: boolean) {
+    this.gridGroup.visible = on;
+    this.dirty = true;
+  }
+
+  private onBoard(h: Hole): boolean {
+    return h.c >= 0 && h.r >= 0 && h.c < this.board.cols && h.r < this.board.rows;
   }
 
   /** Holes ("side:c,r") that hold a female socket strip, so parts plugged into them sit raised. */
@@ -138,7 +174,8 @@ export class View {
   /** Build a part's mesh and put it on the board, flipped over when it is on the underside. */
   private mount(inst: PartInstance): THREE.Group {
     const side = inst.side ?? 'top';
-    const onStrip = pinHoles(inst).some((h) => this.stripHoles.has(`${side}:${holeKey(h)}`));
+    const holes = pinHoles(inst);
+    const onStrip = holes.some((h) => this.stripHoles.has(`${side}:${holeKey(h)}`));
     const body = buildPart(inst, onStrip);
     const g = new THREE.Group();
     g.add(body);
@@ -147,7 +184,8 @@ export class View {
       body.rotation.z = Math.PI;
       body.position.y = -BOARD_T;
     }
-    g.position.set(inst.pos.x, 0, inst.pos.y);
+    // Parts beside the board rest on the bench, one board thickness lower.
+    g.position.set(inst.pos.x, holes.some((h) => this.onBoard(h)) ? 0 : -BOARD_T, inst.pos.y);
     g.rotation.y = (-inst.rot * Math.PI) / 2;
     return g;
   }
@@ -155,14 +193,16 @@ export class View {
   private buildLink(l: Link, selected: boolean): THREE.Mesh {
     const top = l.side === 'top';
     const y = top ? 0.02 : -BOARD_T - 0.02;
-    const a = new THREE.Vector3(l.a.x, y, l.a.y);
-    const b = new THREE.Vector3(l.b.x, y, l.b.y);
+    // An end beside the board meets the pin of a part lying on the bench.
+    const end = (v: { x: number; y: number }) => new THREE.Vector3(v.x, this.onBoard(toHole(v)) ? y : -BOARD_T + 0.02, v.y);
+    const a = end(l.a);
+    const b = end(l.b);
     const len = a.distanceTo(b);
     let mesh: THREE.Mesh;
     if (l.kind === 'wire') {
       const rise = top ? Math.min(14, Math.max(2.5, len * 0.3)) : -Math.min(3, Math.max(1.2, len * 0.08));
       const mid = a.clone().add(b).multiplyScalar(0.5);
-      mid.y = y + rise * 2;
+      mid.y += rise * 2;
       const curve = new THREE.QuadraticBezierCurve3(a, mid, b);
       const mat = new THREE.MeshStandardMaterial({ color: l.color, roughness: 0.6, flatShading: true });
       mat.userData.own = true;
@@ -269,14 +309,14 @@ export class View {
     this.ray.setFromCamera(ndc, this.camera);
   }
 
-  /** Hole under the cursor on the face being viewed, or null when off the board. */
+  /** Grid point under the cursor on the face being viewed: a board hole or a spot on the bench. Null beyond the bench. */
   pickHole(e: { clientX: number; clientY: number }): Hole | null {
     this.aim(e);
     const y = this.viewSide() === 'top' ? 0 : -BOARD_T;
     const hit = this.ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -y), new THREE.Vector3());
     if (!hit) return null;
     const h = toHole({ x: hit.x, y: hit.z });
-    return h.c >= 0 && h.r >= 0 && h.c < this.board.cols && h.r < this.board.rows ? h : null;
+    return h.c >= -BENCH && h.r >= -BENCH && h.c < this.board.cols + BENCH && h.r < this.board.rows + BENCH ? h : null;
   }
 
   /** Part or link under the cursor. */

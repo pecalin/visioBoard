@@ -14,6 +14,7 @@ export interface Hover {
 }
 
 const STORE_KEY = 'visioboard.design.v1';
+const GRID_KEY = 'visioboard.grid';
 const MAX_UNDO = 100;
 
 export class Editor {
@@ -59,6 +60,7 @@ export class Editor {
         /* ignore a corrupt autosave */
       }
     }
+    this.view.setGrid(localStorage.getItem(GRID_KEY) !== 'off');
     this.refresh(false);
     this.view.setView('3d');
   }
@@ -138,14 +140,25 @@ export class Editor {
     return this.selection?.kind === 'link' ? this.design.links.find((l) => l.id === this.selection!.id) : undefined;
   }
 
-  private inBoard(h: Hole) {
-    return h.c >= 0 && h.r >= 0 && h.c < this.design.board.cols && h.r < this.design.board.rows;
+  private inBoard(h: Hole, board = this.design.board) {
+    return h.c >= 0 && h.r >= 0 && h.c < board.cols && h.r < board.rows;
   }
 
-  /** A part fits when every pin is on the board and in a hole no other part uses. */
+  /**
+   * Where a part sits: on the board (every pin in a hole), on the bench beside it
+   * (no pin on the board, top side up), or nowhere valid (straddling the edge).
+   */
+  private zone(inst: PartInstance, board = this.design.board): 'board' | 'bench' | null {
+    const holes = pinHoles(inst);
+    const inside = holes.filter((h) => this.inBoard(h, board)).length;
+    if (inside === holes.length) return 'board';
+    return inside === 0 && inst.side !== 'bottom' ? 'bench' : null;
+  }
+
+  /** A part fits when it is wholly on the board or wholly beside it, on grid points no other part uses. */
   fits(inst: PartInstance): boolean {
     const holes = pinHoles(inst);
-    if (!holes.every((h) => this.inBoard(h))) return false;
+    if (!this.zone(inst)) return false;
     const strip = isSocketStrip(inst.type);
     const side = inst.side ?? 'top';
     return holes.every((h) => {
@@ -175,7 +188,7 @@ export class Editor {
     this.view.setPreview(null, null);
     this.status =
       t === 'wire'
-        ? 'Wire: click a hole, then a second hole. Flip the board to wire the other side.'
+        ? 'Wire: click a hole or an off-board pin, then a second one. Flip the board to wire the other side.'
         : t === 'bridge'
           ? 'Solder bridge: click a pad, then another pad in a straight line.'
           : t === 'erase'
@@ -190,7 +203,7 @@ export class Editor {
     this.selection = null;
     this.placing = { id: 'ghost', type, ref: '', pos: { x: 0, y: 0 }, rot: 0, props: defaultProps(def) };
     this.setTool('place');
-    this.status = `Placing ${def.name}: click a hole. It mounts on the side you are viewing. R rotates, Esc cancels.`;
+    this.status = `Placing ${def.name}: click a hole, or a spot beside the board. It mounts on the side you are viewing. R rotates, Esc cancels.`;
     this.refresh(false);
   }
 
@@ -218,6 +231,7 @@ export class Editor {
   flipSelection() {
     const part = this.selectedPart();
     if (!part) return;
+    if (this.zone(part) === 'bench') return this.say('Only parts on the board can go to the bottom side.');
     const side: Side | undefined = (part.side ?? 'top') === 'top' ? 'bottom' : undefined;
     // Flipping mirrors the footprint, so shift the origin to keep the part over the same holes.
     const corner = (p: PartInstance) => {
@@ -258,7 +272,7 @@ export class Editor {
     const part = this.design.parts.find((p) => p.id === id);
     if (!part) return;
     const changed = { ...part, props: { ...part.props, [key]: value } };
-    if (!this.fits(changed)) return this.say('That size does not fit here: pins would collide or leave the board.');
+    if (!this.fits(changed)) return this.say('That size does not fit here: pins would collide or straddle the board edge.');
     this.mutate(() => (part.props = changed.props));
   }
 
@@ -278,12 +292,24 @@ export class Editor {
 
   resizeBoard(cols: number, rows: number) {
     if (!(cols >= 2 && cols <= 80 && rows >= 2 && rows <= 80)) return this.say('Board size must be between 2 and 80 holes.');
-    const ok = (h: Hole) => h.c < cols && h.r < rows;
+    const next = { cols, rows, pitch: P };
     const blocked =
-      this.design.parts.some((p) => !pinHoles(p).every(ok)) || this.design.links.some((l) => !linkHoles(l).every(ok));
-    if (blocked) return this.say('Parts or wires sit outside that size: move or delete them first.');
+      this.design.parts.some((p) => !this.zone(p, next)) ||
+      this.design.links.some((l) => l.kind === 'bridge' && !linkHoles(l).every((h) => this.inBoard(h, next)));
+    if (blocked) return this.say('Parts or bridges would straddle the new board edge: move or delete them first.');
     this.mutate(() => (this.design.board = { cols, rows, pitch: P }));
     this.view.setView('3d');
+  }
+
+  /** Show or hide the bench grid around the board. */
+  toggleGrid() {
+    this.view.setGrid(!this.view.grid);
+    try {
+      localStorage.setItem(GRID_KEY, this.view.grid ? 'on' : 'off');
+    } catch {
+      /* preference just will not persist */
+    }
+    this.onChange();
   }
 
   /** Highlight a whole net from the side panel. Pass null to clear. */
@@ -323,6 +349,7 @@ export class Editor {
   }
 
   addLink(kind: Link['kind'], a: Hole, b: Hole, side = this.view.viewSide(), color = this.wireColor) {
+    if (!this.inBoard(a) && !this.inBoard(b)) side = 'top'; // bench to bench: nothing to go under
     this.mutate(() => this.design.links.push({ id: uid(), kind, side, a: toVec(a), b: toVec(b), color: kind === 'wire' ? color : '#d9dde3' }));
   }
 
@@ -403,7 +430,7 @@ export class Editor {
       case 'place': {
         if (!hole || !this.placing) break;
         const made = this.addPart(this.placing.type, hole, this.placing.rot, this.placing.props, this.view.viewSide());
-        if (!made) this.say('Does not fit here: a pin is off the board or the hole is taken.');
+        if (!made) this.say('Does not fit here: a spot is taken, or the part straddles the board edge.');
         else this.say(`Placed ${made.ref}. Click to place another, Esc to stop.`);
         this.updateGhost();
         break;
@@ -411,6 +438,10 @@ export class Editor {
       case 'wire':
       case 'bridge': {
         if (!hole) break;
+        if (this.tool === 'bridge' && !this.inBoard(hole)) {
+          this.say('Solder bridges need pads: stay on the board. Use Wire to reach parts beside it.');
+          break;
+        }
         if (!this.start) {
           this.start = hole;
           this.say('Now click the end point. Esc cancels.');
@@ -439,7 +470,8 @@ export class Editor {
   private updateGhost() {
     if (this.tool !== 'place' || !this.placing || !this.hover) return this.view.setGhost(null);
     this.placing.pos = toVec(this.hover);
-    this.placing.side = this.view.viewSide() === 'bottom' ? 'bottom' : undefined;
+    this.placing.side = undefined;
+    if (this.view.viewSide() === 'bottom' && this.zone(this.placing) !== 'bench') this.placing.side = 'bottom';
     this.view.setGhost(this.placing, this.fits(this.placing));
   }
 
@@ -451,7 +483,7 @@ export class Editor {
 
   private describe(h: Hole): string {
     const here = this.pinsAt.get(holeKey(h)) ?? [];
-    const where = `col ${h.c + 1}, row ${h.r + 1}`;
+    const where = this.inBoard(h) ? `col ${h.c + 1}, row ${h.r + 1}` : 'beside the board';
     const others = this.peers(h).filter((p) => !here.some((q) => q.partId === p.partId && q.name === p.name));
     const list = (ps: NetPin[]) => ps.map((p) => `${p.ref}.${p.name}`).join(', ');
     if (!here.length) return others.length ? `${where}  ·  joined to ${list(others)}` : where;
@@ -476,6 +508,7 @@ export class Editor {
     else if (k === 'e') this.setTool('erase');
     else if (k === 'r') this.rotateSelection();
     else if (k === 'f') this.flipSelection();
+    else if (k === 'g') this.toggleGrid();
     else if (k === 'delete' || k === 'backspace') this.deleteSelection();
   }
 }

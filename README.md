@@ -12,6 +12,7 @@ Everything runs client-side, so it hosts on GitHub Pages with no backend.
 - About 35 low-poly parts: ESP32 variants, Arduino Nano, Pi Pico, TCA9548A,
   level shifters, shift registers, sensors, passives, connectors
 - Parts, jumper wires and solder bridges on either side of the board
+- Parts can also sit beside the board on a bench grid (toggle with `G`) and be wired to it
 - Female header sockets: as strips you plug boards into, or as an "On socket" option per board
 - Net tracing: hover a pin to see everything joined to it; short-circuit warnings
 - Adjustable row spacing, lead spacing and header length per part
@@ -25,6 +26,7 @@ Everything runs client-side, so it hosts on GitHub Pages with no backend.
 | Select, Wire, Bridge, Erase | `V`, `W`, `B`, `E` |
 | Rotate part | `R` |
 | Move part to the other side | `F` |
+| Show / hide the bench grid | `G` |
 | Delete selection | `Del` |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Y` |
 | Cancel | `Esc` |

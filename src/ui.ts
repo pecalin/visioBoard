@@ -54,6 +54,7 @@ export function initUI(ed: Editor) {
   $('view-top').onclick = () => (ed.view.setView('top'), render());
   $('view-bottom').onclick = () => (ed.view.setView('bottom'), render());
   $('view-3d').onclick = () => (ed.view.setView('3d'), render());
+  $('grid').onclick = () => ed.toggleGrid();
   $('undo').onclick = () => ed.undo();
   $('redo').onclick = () => ed.redo();
 
@@ -152,9 +153,11 @@ export function initUI(ed: Editor) {
     const part = ed.selectedPart()!;
     const def = getDef(part.type)!;
     const origin = toHole(part.pos);
+    const { cols, rows } = ed.design.board;
+    const onBoard = pinHoles(part).some((h) => h.c >= 0 && h.r >= 0 && h.c < cols && h.r < rows);
     inspector.append(
       el('h2', {}, part.ref),
-      el('div', { class: 'sub' }, `${def.name} · ${part.side === 'bottom' ? 'bottom' : 'top'} side · pin 1 at col ${origin.c + 1}, row ${origin.r + 1}`),
+      el('div', { class: 'sub' }, onBoard ? `${def.name} · ${part.side === 'bottom' ? 'bottom' : 'top'} side · pin 1 at col ${origin.c + 1}, row ${origin.r + 1}` : `${def.name} · beside the board`),
     );
     const note = el('input', { type: 'text', value: part.note ?? '', placeholder: 'e.g. 10 kΩ, 100 nF' });
     note.onchange = () => ed.setNote(part.id, note.value.trim());
@@ -179,7 +182,7 @@ export function initUI(ed: Editor) {
     rot.onclick = () => ed.rotateSelection();
     const del = el('button', { class: 'danger', title: 'Delete (Del)' }, 'Delete');
     del.onclick = () => ed.deleteSelection();
-    inspector.append(el('div', { class: 'row buttons' }, rot, flip, del), el('h3', {}, 'Pins'));
+    inspector.append(el('div', { class: 'row buttons' }, ...(onBoard ? [rot, flip, del] : [rot, del])), el('h3', {}, 'Pins'));
 
     const table = el('table');
     for (const pin of pinHoles(part)) {
@@ -194,9 +197,12 @@ export function initUI(ed: Editor) {
     const link = ed.selectedLink()!;
     const a = toHole(link.a);
     const b = toHole(link.b);
+    const { cols, rows } = ed.design.board;
+    const at = (h: { c: number; r: number }) =>
+      h.c >= 0 && h.r >= 0 && h.c < cols && h.r < rows ? `col ${h.c + 1}, row ${h.r + 1}` : 'beside the board';
     inspector.append(
       el('h2', {}, link.kind === 'wire' ? 'Jumper wire' : 'Solder bridge'),
-      el('div', { class: 'sub' }, `${link.side === 'top' ? 'Top' : 'Bottom'} side · col ${a.c + 1}, row ${a.r + 1} → col ${b.c + 1}, row ${b.r + 1}`),
+      el('div', { class: 'sub' }, `${link.side === 'top' ? 'Top' : 'Bottom'} side · ${at(a)} → ${at(b)}`),
     );
     if (link.kind === 'wire') inspector.append(el('div', { class: 'sub' }, 'Pick a colour in the toolbar to recolour this wire.'));
     const del = el('button', { class: 'danger' }, 'Delete');
@@ -224,7 +230,7 @@ export function initUI(ed: Editor) {
     }
     inspector.append(el('h3', {}, `Connections (${nets.length})`));
     if (!nets.length)
-      inspector.append(el('div', { class: 'sub' }, 'Nothing is joined yet. Pick a part on the left, click a hole to place it, then use Wire or Bridge.'));
+      inspector.append(el('div', { class: 'sub' }, 'Nothing is joined yet. Pick a part on the left, click a hole (or a spot beside the board) to place it, then use Wire or Bridge.'));
     for (const n of nets) inspector.append(hoverable(el('div', { class: 'net' }, pinList(n.pins)), n.id));
   };
 
@@ -232,6 +238,7 @@ export function initUI(ed: Editor) {
   function render() {
     for (const b of toolButtons) b.classList.toggle('active', b.dataset.tool === ed.tool);
     swatches.forEach((b, i) => b.classList.toggle('active', WIRE_COLORS[i] === ed.wireColor));
+    $('grid').classList.toggle('active', ed.view.grid);
     ($('undo') as HTMLButtonElement).disabled = !ed.canUndo;
     ($('redo') as HTMLButtonElement).disabled = !ed.canRedo;
     if (document.activeElement !== name) name.value = ed.design.name;
